@@ -1,0 +1,127 @@
+#!/usr/bin/python
+#-*-coding:utf-8-*-
+
+from __future__ import division
+import math
+import sys
+#import numpy
+
+
+
+"""desiredsparseness can be set [0.1,0.2,0.3,0.4,0.5]"""
+def l1sparse(dimension,desiredsparseness):
+    return math.sqrt(dimension) - (math.sqrt(dimension)-1)*desiredsparseness
+
+
+def vsum(vector):
+    sum = 0
+    for v in vector:
+	sum += v
+    return sum
+def v2sum(vector):
+    sum = 0
+    for v in vector:
+	sum += v*v
+    return sum
+
+def vadd(vector,factor):
+    vresult = []
+    for v in vector:
+	v += factor
+	vresult.append(v)
+    return vresult
+
+def vmultip(vector,factor):
+    vresult = []
+    for v in vector:
+	v = v*factor
+	vresult.append(v)
+    return v
+
+def ones(dimension,num):
+    v = []
+    for i in xrange(dimension):
+	v.append(num)
+    return v
+
+def vdec(svector,dvector):
+    vresult = []
+    for i in xrange(len(svector)):
+	t = svector[i]-dvector[i]
+	vresult.append(t)
+    return vresult
+
+def vaddv(svector,dvector):
+    vresult = []
+    for i in xrange(len(svector)):
+	t = svector[i] + dvector[i]
+	vresult.append(t)
+    return vresult
+"""This should inverse svector first
+   svector:N*1
+   dvector 1*N"""
+
+def vmultipv(svector,dvector):
+    sum = 0
+    for i in xrange(svector):
+	sum += svector[i]*dvector[i]
+    return sum
+
+def checknon(svector):
+    valid = True
+    for v in svector:
+	if v<0:
+	    valid = False
+	    break
+    return valid
+
+def findne(svector):
+    vresult = []
+    for i in xrange(len(svector)):
+	if svector[i]<0:
+	    vresult.append(i)
+    return vresult
+
+""" This function solves following :
+    Given a vector svector,find a vector k which 
+    having sum(abs(k))=l1norm;sum(k,2)=l2norm ;
+    and is closest to svector in euclidian distance
+    if nn is set to 1 ,and the elements of k is
+    restricted to non-nagative"""
+
+def projfuc(svector,l1norm,l2norm,nn):
+    N = len(svector)
+    sum = vsum(svector)
+    factor = (l1norm-sum)/N
+    v = vadd(svector,factor)
+    zerov = []
+    j = 0#iter times
+    while 1:
+        p = ones(N,1)
+	factor = l1norm/(N-len(zerov))
+	midpoint = vmultip(p,factor)
+	for vp in zerov:
+	    midpoint[vp] = 0
+	w = vdec(v,midpoint)
+	a = v2sum(w)
+	b = vmultipv(w,v)*2
+	c = v2sum(v)-l2norm
+	alphap = (-b+float(math.sqrt(b*b-4*a*c)))/(2*a)
+	v1 = vmultip(w,alphap)
+	vnew = vaddv(v1,v)
+	valid = checknon(vnew)
+	if valid:
+	    j +=1
+	    v = vnew
+	    break;
+	j+=1
+	zerov = findne(vnew)
+        for vp in zerov:
+	    vnew[vp] = 0
+	sum = vsum(vnew)
+        factor = (l1norm-sum)/(N-len(zerov))
+        v = vadd(vnew,factor)
+        for vp in zerov:
+	    v[vp] = 0
+    
+    return v 
