@@ -9,6 +9,10 @@ from scipy.signal import butter, firwin
 %load_ext autoreload
 %autoreload 2
 
+
+
+Load Sample Signal + ECG + PPG
+
 file_uid = 'datasample/sample_data.pkl'
 prior_bpm = 90
 
@@ -38,6 +42,7 @@ plt.xlabel('Time [s]')
 plt.xlim([0,tf])
 plt.legend()
 plt.show()
+
 
 
 
@@ -86,7 +91,9 @@ quality_cum_array = iHR_utils.quality_process(Vc,prior_bpm,fs,window = window,
 
 
 
+
 Best Signal
+
 ix_qual = np.argmax(quality_cum_array)
 fL = 0.4
 fH = 5
