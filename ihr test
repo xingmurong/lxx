@@ -1,0 +1,229 @@
+import numpy as np
+import pickle
+import matplotlib.pyplot as plt
+import scipy as scipy
+import sq_stft_utils as sq
+import iHR_utils
+from scipy.signal import butter, firwin
+
+%load_ext autoreload
+%autoreload 2
+
+file_uid = 'datasample/sample_data.pkl'
+prior_bpm = 90
+
+with open(file_uid, 'rb') as f:
+    save_data = pickle.load(f)
+
+Y = save_data['Y']
+fs = save_data['fs']
+ecg = save_data['ecg']
+cppg = save_data['cppg']
+prior_bpm = save_data['prior_bpm']
+
+time_ecg = ecg[:,0]
+signal_ecg = ecg[:,1]
+fs_ecg = (time_ecg.shape[0])/np.max(time_ecg)
+
+time_cppg = cppg[:,0]
+signal_cppg = cppg[:,1]
+
+# Plot ECG/PPG and iHR from ECG first 15 seconds
+tf = 15
+plt.figure(figsize = (10,3))
+plt.plot(time_ecg[time_ecg<tf],signal_ecg[time_ecg<tf],label = 'ECG')
+plt.plot(time_cppg[time_cppg<tf],signal_cppg[time_cppg<tf],label = 'contact PPG')
+plt.ylabel('A.U')
+plt.xlabel('Time [s]')
+plt.xlim([0,tf])
+plt.legend()
+plt.show()
+
+
+
+
+Process signal matrix  Y∈Rchannels×framesY∈Rchannels×frames ¶
+1) Apply Butter highpass filter
+
+
+fL = 0.4 #low cut
+order = 5
+ns = Y.shape[1]
+ni = 0
+Y = np.array(Y[:,ni:ns])
+b,a = iHR_utils.butter_highpass(fL, fs, order)
+Y_hat = scipy.signal.filtfilt(b, a, Y,axis = 1)
+
+2) Optimal SVD shrinkage
+
+U,s_eta,V = iHR_utils.optimal_svd(Y_hat)
+
+plt.figure(figsize = (4,4))
+plt.title('Singular Values')
+plt.stem(s_eta)
+plt.xlabel('index')
+plt.ylabel('value')
+plt.show()
+
+
+3) Compute quality of eigenvectors
+window = 301 #size of window
+fL = 0.4 #low cutoff frequency
+fH = 5 #high cutoff frequency
+fp_u = 5 #highest display frequency
+fp_d = 0.5 #lowest display frequency
+nv = np.minimum(40,V.shape[0]) #eigenvectors to evaluate
+
+quality_array = iHR_utils.quality_process(V[0:nv,:],prior_bpm,fs,
+                                window = window,fL=fL,fH = fH,
+                                fp_d = fp_d,fp_u = fp_u)
+                                
+3) Compute quality of cumulative eigenvector
+Vc = np.array(V[np.argsort(quality_array)[::-1],:]) #sort vectors by best quality
+Vc = np.cumsum(Vc,axis = 0) #cumulate
+quality_cum_array = iHR_utils.quality_process(Vc,prior_bpm,fs,window = window,
+                                    fL=fL,fH = fH, fp_d = fp_d,fp_u = fp_u,verbose = True)
+
+
+
+Best Signal
+ix_qual = np.argmax(quality_cum_array)
+fL = 0.4
+fH = 5
+
+# GET BEST SIGNAL & COMPUTE STFT #
+senal = Vc[ix_qual,:]
+b,a = iHR_utils.butter_bandpass(fL, fH,fs, order=5)
+filtered_signal = scipy.signal.filtfilt(b, a, senal)
+t_v = np.arange(filtered_signal.shape[0])/fs
+stft_v, f_v,_,_= sq.SST_helper(filtered_signal, fs, fH/fs, fL/fs, windowLength=window)
+
+
+# GET iHR FROM ECG
+curve_I, time_I = iHR_utils.get_iHR_ecg(signal_ecg,fs_ecg,ts = int(window/(2*fs)))
+
+####################################################################################
+#PLOT
+####################################################################################
+# Range of frequencies to plot
+f_v = f_v*fs
+fp_u = 4
+fp_d = 0.5
+nu = np.argmin(np.abs(f_v-fp_u))
+nd = np.argmin(np.abs(f_v-fp_d))
+stft_vp = np.abs(stft_v[nd:nu,:])
+stft_vp = stft_vp[::-1,:]
+
+# Plot Extracted Signal
+nt_i =0
+nt_f = 1200
+
+plt.figure(figsize = (12,8))
+plt.subplot(2,1,1)
+plt.title('Extracted Signal',fontsize = 25)
+plt.ylabel('A.U.',fontsize = 25)
+plt.yticks([-0.05,0,0.05])
+plt.xticks([0,5,10,15,20,25,30])
+plt.plot(t_v[nt_i:nt_f],filtered_signal[nt_i:nt_f]*-1,linewidth = 3)
+ax = plt.gca()
+ax.set_facecolor((1.0, 1, 1))
+plt.grid('on',color = 'gray')
+plt.xlim([t_v[nt_i],t_v[nt_f]])
+
+#Plot STFT
+plt.subplot(2,1,2)
+plt.imshow(stft_vp[:,nt_i:nt_f],extent=[t_v[nt_i], t_v[nt_f],f_v[nd]*60,f_v[nu]*60],
+           aspect = 'auto',cmap='Blues')
+plt.xlabel('Time [s]',fontsize = 25)
+plt.ylabel('Frequency [bpm]',fontsize = 25)
+plt.xticks([0,5,10,15,20,25,30])
+plt_idx = np.logical_and(time_I>=t_v[nt_i],time_I<=t_v[nt_f])
+plt.plot(time_I[plt_idx], curve_I[plt_idx],'r--',markersize = 8, linewidth=5,label = 'ECG IHR')
+plt.legend()
+ax = plt.gca()
+ax.set_facecolor((1.0, 1, 1))
+plt.grid('on',color = 'gray')
+plt.show()
+
+print('Power fraction', quality_cum_array[ix_qual])
+###################################################################################
+
+4) Extract iHR Curve from STFT & compute RMSE
+# Extract iHR Curve from STFT
+
+plt.figure(figsize = (15,3))
+lamb=0.05
+
+guess = np.argsort(np.abs(f_v*60 -prior_bpm))[0]
+curve = iHR_utils.curveExtractor(np.abs(stft_v), lamb, guess)
+curve = f_v[curve.astype('int')]*60
+time = np.arange(np.size(curve))/fs
+
+
+## Compute RMSE at different time intervals
+# interpolate gT curve into video time and compute the RMSE's
+f_int =  scipy.interpolate.interp1d(time_I,curve_I)
+curve_p_int = f_int(time)
+dt= time[1]-time[0]
+
+RMSE_per_time=np.zeros([5])
+rRMSE_per_time=np.zeros([5])
+cnt=0
+for mean_time in [1,10,30, time.max()-1e-2]:
+    RMSE, rRMSE = iHR_utils.compute_RMSE_every_n(curve_p_int,curve, dt,mean_time)
+    print("{:.2f}sec. RMSE {:.2f} rRMSE {:.2f}%".format(mean_time, RMSE, 100*rRMSE))
+    rRMSE_per_time[cnt]=rRMSE
+    RMSE_per_time[cnt]=RMSE
+    cnt+=1
+
+
+## Plot Curves
+plt.plot(time,curve,label ='Extracted iHR')
+plt.plot(time_I[time_I<time[-1]],curve_I[time_I<time[-1]],label ='ECG iHR')
+plt.xlabel('Time [s]')
+plt.legend()
+plt.show()
+
+
+Plot contact PPG, IR non-contact PPG and ECG
+plt.figure(figsize = (15,6))
+ns2 = 2000
+
+t_u = 20
+t_d = 10
+
+pleth_idx_aux = (time_cppg<=t_u) & (time_cppg>=t_d)
+t_p_aux=time_cppg[pleth_idx_aux]
+s_p_aux=signal_cppg[pleth_idx_aux]
+s_p_aux-=s_p_aux.mean()
+s_p_aux/=s_p_aux.std()
+
+ecg_idx_aux = (time_ecg<=t_u) & (time_ecg>=t_d)
+t_e_aux=time_ecg[ecg_idx_aux]
+s_e_aux=signal_ecg[ecg_idx_aux]
+s_e_aux-=s_e_aux.mean()
+s_e_aux/=s_e_aux.std()
+
+
+
+curve_idx_aux = (time<=t_u) & (time>=t_d)
+t_c_aux=time[curve_idx_aux]
+s_c_aux=filtered_signal[curve_idx_aux]
+s_c_aux-=s_c_aux.mean()
+s_c_aux/=s_c_aux.std()
+
+plt.plot(t_c_aux,s_c_aux*-1,linewidth = 3,label = 'IR PPG')
+plt.plot(t_p_aux,s_p_aux,'r--',linewidth = 2.5,label = 'Contact PPG')
+plt.plot(t_e_aux,s_e_aux,'g--',linewidth = 1,label = 'ECG')
+
+plt.legend()
+ax = plt.gca()
+ax.set_facecolor((1.0, 1, 1))
+plt.grid('on',color = 'grey')
+plt.xlabel('Time [s]')
+plt.ylim([-4,4])
+plt.ylabel('A.U.')
+plt.yticks([-1,0,1])
+
+plt.show()
+
